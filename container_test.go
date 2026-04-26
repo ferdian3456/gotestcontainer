@@ -2,7 +2,9 @@ package gotestcontainer_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/smtp"
 	"testing"
@@ -186,12 +188,43 @@ func TestMinioContainer(t *testing.T) {
 	t.Logf("Sucessfully create bucket: my-bucket")
 }
 
+type Message struct {
+	ID      string    `json:"ID"`
+	From    Address   `json:"From"`
+	To      []Address `json:"To"`
+	Content Content   `json:"Content"`
+	Created string    `json:"Created"`
+	MIME    any       `json:"MIME"`
+	Raw     Raw       `json:"Raw"`
+}
+
+type Address struct {
+	Relays  []string `json:"Relays"`
+	Mailbox string   `json:"Mailbox"`
+	Domain  string   `json:"Domain"`
+	Params  string   `json:"Params"`
+}
+
+type Content struct {
+	Headers map[string][]string `json:"Headers"`
+	Body    string              `json:"Body"`
+	Size    int                 `json:"Size"`
+	MIME    any                 `json:"MIME"`
+}
+
+type Raw struct {
+	From string   `json:"From"`
+	To   []string `json:"To"`
+	Data string   `json:"Data"`
+	Helo string   `json:"Helo"`
+}
+
 func TestMailHogContainer(t *testing.T) {
 	ctx := context.Background()
 	var err error
 
 	// pakai generic container karena belum disupport sama test container
-	mailhogContainer, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+	mailHogContainer, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image:        "mailhog/mailhog:latest",
 			ExposedPorts: []string{"1025/tcp", "8025/tcp"},
@@ -205,24 +238,24 @@ func TestMailHogContainer(t *testing.T) {
 	}
 
 	defer func() {
-		err = testcontainers.TerminateContainer(mailhogContainer)
+		err = testcontainers.TerminateContainer(mailHogContainer)
 		if err != nil {
 			t.Logf("failed to terminate container: %v", err)
 		}
 	}()
 
-	host, err := mailhogContainer.Host(ctx)
+	host, err := mailHogContainer.Host(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// cari tahu extrernal port berapa yang di assign ke port 1025 (docker internal)
-	smtpPort, err := mailhogContainer.MappedPort(ctx, "1025")
+	smtpPort, err := mailHogContainer.MappedPort(ctx, "1025")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	apiPort, err := mailhogContainer.MappedPort(ctx, "8025")
+	apiPort, err := mailHogContainer.MappedPort(ctx, "8025")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -253,6 +286,28 @@ func TestMailHogContainer(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
 	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var messages []Message
+	err = json.Unmarshal(body, &messages)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(messages) == 0 {
+		t.Fatal("expected at least 1 message, got 0")
+	}
+
+	bodyJson, err := json.MarshalIndent(messages, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Logf("Messages: %s", string(bodyJson))
 
 	t.Logf("Sucessfully send email to MailHog")
 }
